@@ -1,4 +1,4 @@
-# README — `uzapoint/eventbus-core`
+# 
 
 Repository:
 [https://github.com/uzapoint/eventbus-core](https://github.com/uzapoint/eventbus-core)
@@ -190,5 +190,3 @@ MIT
 Sammy Orondo
 Lead Developer — Uzapoint
 [https://github.com/sammy-boy](https://github.com/sammy-boy)
-
-````
