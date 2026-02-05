@@ -1,0 +1,47 @@
+{
+  "name": "uzapoint/eventbus-core",
+  "description": "Reusable event bus infrastructure for Laravel microservices",
+  "keywords": [
+    "laravel",
+    "microservices",
+    "event-bus",
+    "rabbitmq",
+    "event-driven",
+    "uzapoint"
+  ],
+  "type": "library",
+  "license": "MIT",
+
+  "authors": [
+    {
+      "name": "Sammy Orondo",
+      "email": "sammyorondo2@gmail.com",
+      "homepage": "https://github.com/sammy-boy",
+      "role": "Lead Developer & Package Maintainer"
+    }
+  ],
+
+  "autoload": {
+    "psr-4": {
+      "Uzapoint\\EventBus\\": "src/"
+    }
+  },
+
+  "require": {
+    "php": "^8.4",
+    "illuminate/support": "^11.0|^12.0",
+    "illuminate/contracts": "^11.0|^12.0",
+    "php-amqplib/php-amqplib": "^3.0"
+  },
+
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Uzapoint\\EventBus\\EventBusServiceProvider"
+      ]
+    }
+  },
+
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}
