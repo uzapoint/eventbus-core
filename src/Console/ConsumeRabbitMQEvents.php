@@ -40,8 +40,8 @@ class ConsumeRabbitMQEvents extends Command
     {
         $this->info('🚀 Starting EventBus Consumer...');
 
-        $this->connect();
-        $this->declareDeadLetterExchange();
+        $this->setUpConnection();
+        $this->setUpDeadLetterExchange();
         $this->declareExchanges();
         $this->declareQueues();
         $this->consume();
@@ -50,7 +50,7 @@ class ConsumeRabbitMQEvents extends Command
     /**
      * Establish AMQP connection.
      */
-    protected function connect(): void
+    protected function setUpConnection(): void
     {
         try {
             $this->connection = new AMQPStreamConnection(
@@ -101,10 +101,12 @@ class ConsumeRabbitMQEvents extends Command
                 true,
                 false
             );
+
+            $this->info("Exchange Declared: {$exchange}");
         }
     }
 
-    protected function declareDeadLetterExchange(): void
+    protected function setUpDeadLetterExchange(): void
     {
         if (!config('eventbus.dead_letter.enabled')) return;
 
@@ -117,6 +119,8 @@ class ConsumeRabbitMQEvents extends Command
                 true,
                 false
             );
+
+            $this->info("Created dead letter exchange: {$dlxPrefix}{$exchange}");
         }
     }
 
@@ -128,23 +132,28 @@ class ConsumeRabbitMQEvents extends Command
         $queueConfigs = $this->option('queue') ?: config('eventbus.queues', []);
 
         foreach ($queueConfigs as $queueConfig) {
+            if (is_string($queueConfig)) {
+                $this->info("Skipping queue declaration: {$queueConfig}");
+                continue;
+            }
 
-            $arguments = null;
+            $queueName = $queueConfig['name'];
+            $exchange = $queueConfig['exchange'];
+            $routingKeys = $queueConfig['routing_keys'];
+            $arguments = [];
 
             if (config('eventbus.dead_letter.enabled')) {
-
                 $dlxPrefix = config('eventbus.dead_letter.exchange_prefix', 'dlx.');
-
                 $arguments = new AMQPTable([
                     'x-dead-letter-exchange' =>
-                        $dlxPrefix . $queueConfig['exchange'],
+                        $dlxPrefix . $exchange,
                     'x-message-ttl' =>
                         config('eventbus.dead_letter.ttl', 86400000),
                 ]);
             }
 
             $this->channel->queue_declare(
-                $queueConfig['name'],
+                $queueName,
                 false,
                 true,
                 false,
@@ -153,12 +162,14 @@ class ConsumeRabbitMQEvents extends Command
                 $arguments
             );
 
-            foreach ($queueConfig['routing_keys'] as $routingKey) {
+            foreach ($routingKeys as $routingKey) {
                 $this->channel->queue_bind(
-                    $queueConfig['name'],
-                    $queueConfig['exchange'],
+                    $queueName,
+                    $exchange,
                     $routingKey
                 );
+
+                $this->info("Queue bound: {$queueName} -> {$exchange}:{$routingKey}");
             }
         }
     }
@@ -196,9 +207,10 @@ class ConsumeRabbitMQEvents extends Command
         };
 
         foreach ($queues as $queue) {
+            $queueName = is_array($queue) ? $queue['name'] : $queue;
 
             $this->channel->basic_consume(
-                $queue,
+                $queueName,
                 '',
                 false,
                 false,
@@ -210,8 +222,16 @@ class ConsumeRabbitMQEvents extends Command
             $this->info("📥 Consuming from queue: {$queue}");
         }
 
+        if (function_exists('pcntl_signal')) {
+            pcntl_signal(SIGTERM, fn () => $this->shutdown());
+            pcntl_signal(SIGINT, fn () => $this->shutdown());
+        }
+
         while ($this->channel->is_consuming()) {
             $this->channel->wait();
+            if (function_exists('pcntl_signal_dispatch')) {
+                pcntl_signal_dispatch();
+            }
         }
     }
 
@@ -241,10 +261,14 @@ class ConsumeRabbitMQEvents extends Command
     {
         try {
 
-            $this->channel?->close();
-            $this->connection?->close();
+            if ($this->channel?->is_open())
+                $this->channel?->close();
 
-            $this->info('🛑 EventBus consumer stopped gracefully.');
+            if ($this->connection?->isConnected())
+                $this->connection?->close();
+
+            if(!is_null($this->output))
+                $this->info('🛑 EventBus consumer stopped gracefully.');
 
         } catch (Throwable $e) {
 

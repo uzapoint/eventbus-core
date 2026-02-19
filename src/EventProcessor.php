@@ -64,13 +64,18 @@ class EventProcessor
      */
     protected function dispatch(string $handler, array $data): void
     {
+        if (!class_exists($handler)) {
+            throw new \RuntimeException("Handler Class Not Found: $handler");
+        }
+
         if (method_exists($handler, 'dispatch')) {
             $params = $this->mapConstructor($handler, $data);
             $handler::dispatch(...$params);
-            return;
+        } elseif (method_exists($handler, 'handle')) {
+            app($handler)->handle($data);
+        } else {
+            throw new \RuntimeException("Invalid Handler Class: $handler");
         }
-
-        app($handler)->handle($data);
     }
 
     /**
