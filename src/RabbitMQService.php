@@ -1,9 +1,11 @@
 <?php
 
-namespace Company\EventBus;
+namespace Uzapoint\EventBus;
 
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
+use PhpAmqpLib\Channel\AbstractChannel;
+use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Exchange\AMQPExchangeType;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
@@ -11,8 +13,12 @@ use PhpAmqpLib\Connection\AMQPStreamConnection;
 class RabbitMQService
 {
     protected ?AMQPStreamConnection $connection = null;
-    protected $channel = null;
+    protected AbstractChannel|AMQPChannel|null $channel = null;
 
+    /**
+     * @throws \JsonException
+     * @throws \Exception
+     */
     public function publish(
         string $exchange,
         string $routingKey,
@@ -50,6 +56,9 @@ class RabbitMQService
         $this->channel->wait_for_pending_acks_returns();
     }
 
+    /**
+     * @throws \Exception
+     */
     protected function connect(): void
     {
         if ($this->connection?->isConnected()) return;

@@ -2,6 +2,8 @@
 
 namespace Uzapoint\EventBus\Console;
 
+use PhpAmqpLib\Channel\AbstractChannel;
+use PhpAmqpLib\Channel\AMQPChannel;
 use Throwable;
 use PhpAmqpLib\Wire\AMQPTable;
 use Illuminate\Console\Command;
@@ -20,7 +22,7 @@ class ConsumeRabbitMQEvents extends Command
     protected $description = 'Start the EventBus RabbitMQ consumer';
 
     protected ?AMQPStreamConnection $connection = null;
-    protected $channel = null;
+    protected AbstractChannel|AMQPChannel|null $channel = null;
 
     public function __construct(
         protected EventProcessor $processor

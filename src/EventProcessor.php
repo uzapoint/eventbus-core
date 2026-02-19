@@ -1,6 +1,6 @@
 <?php
 
-namespace Company\EventBus;
+namespace Uzapoint\EventBus;
 
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
@@ -13,6 +13,9 @@ class EventProcessor
         protected EventRegistry $registry
     ) {}
 
+    /**
+     * @throws \ReflectionException
+     */
     public function process(AMQPMessage $message): void
     {
         $routingKey = $message->getRoutingKey();
@@ -56,6 +59,9 @@ class EventProcessor
         return false;
     }
 
+    /**
+     * @throws \ReflectionException
+     */
     protected function dispatch(string $handler, array $data): void
     {
         if (method_exists($handler, 'dispatch')) {
@@ -67,15 +73,23 @@ class EventProcessor
         app($handler)->handle($data);
     }
 
+    /**
+     * @throws \ReflectionException
+     */
     protected function mapConstructor(string $class, array $data): array
     {
-        $reflection = new ReflectionClass($class);
-        $constructor = $reflection->getConstructor();
+        try {
+            $reflection = new ReflectionClass($class);
+            $constructor = $reflection->getConstructor();
 
-        if (!$constructor) return [];
+            if (!$constructor) return [];
 
-        return collect($constructor->getParameters())
-            ->map(fn($param) => $data[$param->getName()] ?? null)
-            ->toArray();
+            return collect($constructor->getParameters())
+                ->map(fn($param) => $data[$param->getName()] ?? null)
+                ->toArray();
+        } catch (\ReflectionException $e) {
+            Log::error($e->getMessage());
+            return [];
+        }
     }
 }

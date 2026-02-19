@@ -1,6 +1,6 @@
 <?php
 
-namespace Company\EventBus;
+namespace Uzapoint\EventBus;
 
 class EventRegistry
 {

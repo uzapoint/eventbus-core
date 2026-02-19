@@ -18,6 +18,12 @@
       "email": "sammyorondo2@gmail.com",
       "homepage": "https://github.com/sammy-boy",
       "role": "Lead Developer & Package Maintainer"
+    },
+    {
+      "name": "Caleb Chege",
+      "email": "caleb98kymez@gmail.com",
+      "homepage": "https://github.com/caleb98kymez",
+      "role": "Technical Lead"
     }
   ],
 
@@ -31,7 +37,8 @@
     "php": "^8.4",
     "illuminate/support": "^11.0|^12.0",
     "illuminate/contracts": "^11.0|^12.0",
-    "php-amqplib/php-amqplib": "^3.0"
+    "php-amqplib/php-amqplib": "^3.0",
+    "illuminate/console": "^12.52"
   },
 
   "extra": {

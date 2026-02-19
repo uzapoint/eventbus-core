@@ -1,9 +1,9 @@
 <?php
 
-namespace Company\EventBus;
+namespace Uzapoint\EventBus;
 
 use Illuminate\Support\ServiceProvider;
-use Company\EventBus\Console\ConsumeRabbitMQEvents;
+use Uzapoint\EventBus\Console\ConsumeRabbitMQEvents;
 
 class EventBusServiceProvider extends ServiceProvider
 {

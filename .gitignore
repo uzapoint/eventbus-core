@@ -1,0 +1,30 @@
+# Dependencies
+/vendor/
+
+# IDE & Editor
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Composer
+composer.phar
+
+# PHP
+/.phpunit.cache
+.phpunit.result.cache
+
+# Environment & Config
+.env
+.env.backup
+.env.testing
+
+# Build & Cache
+/build/
+/dist/
+
+# OS
+Thumbs.db
+composer.lock
