@@ -12,6 +12,7 @@ use PhpAmqpLib\Message\AMQPMessage;
 use Uzapoint\EventBus\EventProcessor;
 use PhpAmqpLib\Exchange\AMQPExchangeType;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
+use Uzapoint\EventBus\EventRegistry;
 
 class ConsumeRabbitMQEvents extends Command
 {
@@ -25,8 +26,10 @@ class ConsumeRabbitMQEvents extends Command
     protected AbstractChannel|AMQPChannel|null $channel = null;
 
     public function __construct(
-        protected EventProcessor $processor
-    ) {
+        protected EventProcessor $processor,
+        protected EventRegistry  $registry
+    )
+    {
         parent::__construct();
     }
 
@@ -38,11 +41,10 @@ class ConsumeRabbitMQEvents extends Command
         $this->info('🚀 Starting EventBus Consumer...');
 
         $this->connect();
+        $this->declareDeadLetterExchange();
         $this->declareExchanges();
         $this->declareQueues();
         $this->consume();
-
-        $this->shutdown();
     }
 
     /**
@@ -53,7 +55,7 @@ class ConsumeRabbitMQEvents extends Command
         try {
             $this->connection = new AMQPStreamConnection(
                 config('queue.connections.rabbitmq.host'),
-                (int) config('queue.connections.rabbitmq.port'),
+                (int)config('queue.connections.rabbitmq.port'),
                 config('queue.connections.rabbitmq.user'),
                 config('queue.connections.rabbitmq.password'),
                 config('queue.connections.rabbitmq.vhost'),
@@ -70,12 +72,12 @@ class ConsumeRabbitMQEvents extends Command
             $this->channel = $this->connection->channel();
 
             $prefetch = config('eventbus.consumer.prefetch_count', 1);
-            $this->channel->basic_qos(null, $prefetch, null);
+            $this->channel->basic_qos((int)null, $prefetch, null);
 
             $this->info('✅ Connected to RabbitMQ');
 
         } catch (Throwable $e) {
-            $this->error('❌ Failed to connect to RabbitMQ');
+            $this->error('❌ Failed to connect to RabbitMQ' . $e->getMessage() . PHP_EOL);
             Log::critical('[EventBus] Connection failed', [
                 'error' => $e->getMessage(),
             ]);
@@ -102,12 +104,28 @@ class ConsumeRabbitMQEvents extends Command
         }
     }
 
+    protected function declareDeadLetterExchange(): void
+    {
+        if (!config('eventbus.dead_letter.enabled')) return;
+
+        foreach (config('eventbus.exchanges', []) as $exchange) {
+            $dlxPrefix = config('eventbus.dead_letter.exchange_prefix', 'dlx.');
+            $this->channel->exchange_declare(
+                $dlxPrefix . $exchange,
+                AMQPExchangeType::TOPIC,
+                false,
+                true,
+                false
+            );
+        }
+    }
+
     /**
      * Declare queues + bindings.
      */
     protected function declareQueues(): void
     {
-        $queueConfigs = config('eventbus.queues', []);
+        $queueConfigs = $this->option('queue') ?: config('eventbus.queues', []);
 
         foreach ($queueConfigs as $queueConfig) {
 
@@ -153,6 +171,30 @@ class ConsumeRabbitMQEvents extends Command
         $queues = $this->option('queue')
             ?: array_column(config('eventbus.queues', []), 'name');
 
+        $callback = function (AMQPMessage $message) {
+            $startTime = microtime(true);
+
+            try {
+                $this->processor->process($message);
+                $message->ack();
+            } catch (Throwable $e) {
+                Log::error('[EventBus] Event processing failed', [
+                    'routing_key' => $message->getRoutingKey(),
+                    'error' => $e->getMessage(),
+                ]);
+
+                if (config('eventbus.consumer.retry_on_failure', false)) {
+                    $message->nack(false, true);
+                    return;
+                }
+
+                // Prevent poison loops
+                $message->ack();
+            }
+
+            $this->monitorPerformance($message, $startTime);
+        };
+
         foreach ($queues as $queue) {
 
             $this->channel->basic_consume(
@@ -162,33 +204,7 @@ class ConsumeRabbitMQEvents extends Command
                 false,
                 false,
                 false,
-                function (AMQPMessage $message) {
-
-                    $startTime = microtime(true);
-
-                    try {
-
-                        $this->processor->process($message);
-                        $message->ack();
-
-                    } catch (Throwable $e) {
-
-                        Log::error('[EventBus] Event processing failed', [
-                            'routing_key' => $message->getRoutingKey(),
-                            'error' => $e->getMessage(),
-                        ]);
-
-                        if (config('eventbus.consumer.retry_on_failure', false)) {
-                            $message->nack(false, true);
-                            return;
-                        }
-
-                        // Prevent poison loops
-                        $message->ack();
-                    }
-
-                    $this->monitorPerformance($message, $startTime);
-                }
+                $callback
             );
 
             $this->info("📥 Consuming from queue: {$queue}");
