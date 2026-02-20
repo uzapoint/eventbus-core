@@ -90,7 +90,15 @@ class EventProcessor
             if (!$constructor) return [];
 
             return collect($constructor->getParameters())
-                ->map(fn($param) => $data[$param->getName()] ?? null)
+                ->map(function ($param) use ($data) {
+                    $name = $param->getName();
+
+                    return match ($name) {
+                        'authUserId' => $data['auth_user_id'] ?? null,
+                        'payload' => $data,
+                        default => $data[$name] ?? null,
+                    };
+                })
                 ->toArray();
         } catch (\ReflectionException $e) {
             Log::error($e->getMessage());
