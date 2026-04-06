@@ -27,9 +27,8 @@ class ConsumeRabbitMQEvents extends Command
 
     public function __construct(
         protected EventProcessor $processor,
-        protected EventRegistry  $registry
-    )
-    {
+        protected EventRegistry $registry
+    ) {
         parent::__construct();
     }
 
@@ -38,7 +37,14 @@ class ConsumeRabbitMQEvents extends Command
      */
     public function handle(): void
     {
-        $this->info('🚀 Starting EventBus Consumer...');
+        $this->info('Starting EventBus Consumer...');
+
+        // Exit gracefully if no queues are configured — nothing to consume
+        if (empty(config('eventbus.queues', []))) {
+            $this->info('No queues configured for this service. EventBus consumer exiting...');
+            return;
+        }
+
 
         $this->setUpConnection();
         $this->setUpDeadLetterExchange();
@@ -55,7 +61,7 @@ class ConsumeRabbitMQEvents extends Command
         try {
             $this->connection = new AMQPStreamConnection(
                 config('queue.connections.rabbitmq.host'),
-                (int)config('queue.connections.rabbitmq.port'),
+                (int) config('queue.connections.rabbitmq.port'),
                 config('queue.connections.rabbitmq.user'),
                 config('queue.connections.rabbitmq.password'),
                 config('queue.connections.rabbitmq.vhost'),
@@ -72,12 +78,12 @@ class ConsumeRabbitMQEvents extends Command
             $this->channel = $this->connection->channel();
 
             $prefetch = config('eventbus.consumer.prefetch_count', 1);
-            $this->channel->basic_qos((int)null, $prefetch, null);
+            $this->channel->basic_qos((int) null, $prefetch, null);
 
-            $this->info('✅ Connected to RabbitMQ');
+            $this->info('Connected to RabbitMQ');
 
         } catch (Throwable $e) {
-            $this->error('❌ Failed to connect to RabbitMQ' . $e->getMessage() . PHP_EOL);
+            $this->error('Failed to connect to RabbitMQ' . $e->getMessage() . PHP_EOL);
             Log::critical('[EventBus] Connection failed', [
                 'error' => $e->getMessage(),
             ]);
@@ -108,7 +114,8 @@ class ConsumeRabbitMQEvents extends Command
 
     protected function setUpDeadLetterExchange(): void
     {
-        if (!config('eventbus.dead_letter.enabled')) return;
+        if (!config('eventbus.dead_letter.enabled'))
+            return;
 
         foreach (config('eventbus.exchanges', []) as $exchange) {
             $dlxPrefix = config('eventbus.dead_letter.exchange_prefix', 'dlx.');
@@ -219,12 +226,12 @@ class ConsumeRabbitMQEvents extends Command
                 $callback
             );
 
-            $this->info("📥 Consuming from queue: {$queue}");
+            $this->info("Consuming from queue: {$queue}");
         }
 
         if (function_exists('pcntl_signal')) {
-            pcntl_signal(SIGTERM, fn () => $this->shutdown());
-            pcntl_signal(SIGINT, fn () => $this->shutdown());
+            pcntl_signal(SIGTERM, fn() => $this->shutdown());
+            pcntl_signal(SIGINT, fn() => $this->shutdown());
         }
 
         while ($this->channel->is_consuming()) {
@@ -267,7 +274,7 @@ class ConsumeRabbitMQEvents extends Command
             if ($this->connection?->isConnected())
                 $this->connection?->close();
 
-            if(!is_null($this->output))
+            if (!is_null($this->output))
                 $this->info('🛑 EventBus consumer stopped gracefully.');
 
         } catch (Throwable $e) {
