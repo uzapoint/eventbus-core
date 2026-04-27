@@ -5,7 +5,9 @@ namespace Uzapoint\EventBus;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 use PhpAmqpLib\Message\AMQPMessage;
+use Throwable;
 use ReflectionClass;
+use RuntimeException;
 
 class EventProcessor
 {
@@ -14,72 +16,132 @@ class EventProcessor
     ) {}
 
     /**
-     * @throws \ReflectionException
+     * Main entry point for processing events
      */
     public function process(AMQPMessage $message): void
     {
         $routingKey = $message->getRoutingKey();
         $payload = json_decode($message->getBody(), true);
 
-        if (!$payload || !isset($payload['data'])) {
-            Log::error('[EventBus] Invalid message envelope');
+        $trace = [
+            'routing_key' => $routingKey,
+            'delivery_tag' => $message->getDeliveryTag() ?? null,
+        ];
+
+        if (!is_array($payload) || !isset($payload['data'])) {
+            Log::error('[EventBus] Invalid event envelope', $trace + [
+                    'body' => $message->getBody(),
+                ]);
             return;
         }
 
         $meta = $payload['meta'] ?? [];
         $data = $payload['data'];
 
-        $id = $meta['id'] ?? null;
+        $eventId = $meta['id'] ?? null;
+        $correlationId = $meta['correlation_id'] ?? $meta['id'] ?? null;
 
-        if ($this->isDuplicate($id)) {
+        $trace['correlation_id'] = $correlationId;
+
+        /**
+         * 1. Idempotency guard (must be atomic)
+         */
+        if ($this->isDuplicate($eventId)) {
+            Log::warning('[EventBus] Duplicate event ignored', $trace + [
+                    'event_id' => $eventId,
+                ]);
             return;
         }
 
-        $handler = $this->registry->getHandler($routingKey);
+        /**
+         * 2. Resolve handler (registry first, fallback to config)
+         */
+        $handler = $this->registry->getHandler($routingKey)
+            ?? config("eventbus.handlers.$routingKey");
 
         if (!$handler) {
+            Log::warning('[EventBus] No handler registered for event', $trace);
             return;
         }
 
-        $this->dispatch($handler, $data);
-    }
+        Log::info('[EventBus] Event received', $trace + [
+                'handler' => $handler,
+            ]);
 
-    protected function isDuplicate(?string $id): bool
-    {
-        if (!$id) return false;
+        /**
+         * 3. Execute handler safely
+         */
+        try {
+            $this->dispatch($handler, $data);
+        } catch (Throwable $e) {
+            Log::error('[EventBus] Handler execution failed', $trace + [
+                    'handler' => $handler,
+                    'error' => $e->getMessage(),
+                ]);
 
-        $key = config('eventbus.idempotency.redis_prefix') . $id;
-
-        if (Redis::get($key)) {
-            return true;
+            /**
+             * IMPORTANT:
+             * Let consumer decide retry strategy (ack/nack).
+             */
+            throw $e;
         }
-
-        Redis::setex($key, config('eventbus.idempotency.ttl'), 1);
-
-        return false;
     }
 
     /**
-     * @throws \ReflectionException
+     * Atomic idempotency check using SET NX EX
+     */
+    protected function isDuplicate(?string $id): bool
+    {
+        if (!$id) {
+            return false;
+        }
+
+        $key = config('eventbus.idempotency.redis_prefix') . $id;
+        $ttl = (int) config('eventbus.idempotency.ttl', 3600);
+
+        try {
+            $result = Redis::set($key, 1, 'EX', $ttl, 'NX');
+            return $result === null;
+        } catch (Throwable $e) {
+            // Fail-open OR fail-safe decision:
+            // we log but DO NOT block processing
+            Log::error('[EventBus] Redis idempotency check failed', [
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
+    /**
+     * Dispatch handler (supports Laravel jobs or service handlers)
      */
     protected function dispatch(string $handler, array $data): void
     {
         if (!class_exists($handler)) {
-            throw new \RuntimeException("Handler Class Not Found: $handler");
+            throw new RuntimeException("Handler not found: {$handler}");
         }
 
+        // Queueable job style
         if (method_exists($handler, 'dispatch')) {
             $params = $this->mapConstructor($handler, $data);
             $handler::dispatch(...$params);
-        } elseif (method_exists($handler, 'handle')) {
-            app($handler)->handle($data);
-        } else {
-            throw new \RuntimeException("Invalid Handler Class: $handler");
+            return;
         }
+
+        // Service-style handler
+        $instance = app($handler);
+
+        if (!method_exists($instance, 'handle')) {
+            throw new RuntimeException("Invalid handler: {$handler} (missing handle method)");
+        }
+
+        $instance->handle($data);
     }
 
     /**
-     * @throws \ReflectionException
+     * Map constructor args dynamically
      */
     protected function mapConstructor(string $class, array $data): array
     {
@@ -87,7 +149,9 @@ class EventProcessor
             $reflection = new ReflectionClass($class);
             $constructor = $reflection->getConstructor();
 
-            if (!$constructor) return [];
+            if (!$constructor) {
+                return [];
+            }
 
             return collect($constructor->getParameters())
                 ->map(function ($param) use ($data) {
@@ -95,13 +159,19 @@ class EventProcessor
 
                     return match ($name) {
                         'authUserId' => $data['auth_user_id'] ?? null,
-                        'payload' => $data,
-                        default => $data[$name] ?? null,
+                        'payload'    => $data,
+                        default      => $data[$name] ?? null,
                     };
                 })
+                ->values()
                 ->toArray();
-        } catch (\ReflectionException $e) {
-            Log::error($e->getMessage());
+
+        } catch (Throwable $e) {
+            Log::error('[EventBus] Constructor mapping failed', [
+                'class' => $class,
+                'error' => $e->getMessage(),
+            ]);
+
             return [];
         }
     }
