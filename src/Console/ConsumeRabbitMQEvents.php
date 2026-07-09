@@ -353,7 +353,9 @@ class ConsumeRabbitMQEvents extends Command
             $this->channel?->close();
             $this->connection?->close();
 
-            $this->info('🛑 EventBus consumer stopped');
+            if (isset($this->output)) {
+                $this->info('🛑 EventBus consumer stopped');
+            }
 
         } catch (Throwable $e) {
             Log::warning('[EventBus] Shutdown error', [
