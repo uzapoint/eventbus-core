@@ -15,7 +15,7 @@ return [
     | Queues
     |--------------------------------------------------------------------------
     | [
-    |   ['name' => '', 'exchange' => '', 'routing_keys' => [], 'retry' => true],
+    |   ['name' => '', 'exchange' => '', 'routing_keys' => []],
     | ]
     | NOTE: changing x-* arguments of an existing queue causes PRECONDITION_FAILED.
     */
@@ -36,9 +36,9 @@ return [
     | After max_retries a message is parked in "<queue>.dlq" (never silently acked away).
     */
     'dead_letter' => [
-        'enabled' => true,
-        'ttl' => 86400000, // 24h in ms
-        'max_retries' => 3,
+        'enabled' => env('EVENTBUS_DLX_ENABLED', true),
+        'ttl' => (int) env('EVENTBUS_DLX_TTL', 86400000), // 24h in ms
+        'max_retries' => (int) env('EVENTBUS_MAX_RETRIES', 3),
         'exchange_prefix' => 'dlx.',
     ],
 
@@ -50,12 +50,13 @@ return [
     | released if it fails; the event is marked done for the full ttl only AFTER it succeeded.
     | lock_ttl must be longer than the slowest handler, and short enough that a replay after a
     | crashed worker is not ignored for long.
+    | Give every service its own redis_prefix when several services consume the same message.
     */
     'idempotency' => [
-        'enabled' => true,
-        'ttl' => 3600,
-        'lock_ttl' => 120,
-        'redis_prefix' => 'event:processed:',
+        'enabled' => env('EVENTBUS_IDEMPOTENCY_ENABLED', true),
+        'ttl' => (int) env('EVENTBUS_IDEMPOTENCY_TTL', 3600),
+        'lock_ttl' => (int) env('EVENTBUS_IDEMPOTENCY_LOCK_TTL', 120),
+        'redis_prefix' => env('EVENTBUS_IDEMPOTENCY_PREFIX', 'event:processed:'),
     ],
 
     /*
@@ -63,15 +64,15 @@ return [
     | Consumer Configuration
     |--------------------------------------------------------------------------
     | read_write_timeout must be > 2 x heartbeat.
-    | liveness_dir: each consumer touches eventbus-<pid>.alive every loop; the
-    | watchdog (ops/eventbus-watchdog.sh) kills consumers whose file goes stale.
+    | liveness_dir: each consumer touches eventbus-<pid>.alive every loop; the watchdog
+    | (ops/eventbus-watchdog.sh) kills consumers whose file goes stale. null => storage/framework/eventbus.
     */
     'consumer' => [
-        'prefetch_count' => 1,
-        'heartbeat' => 60,
-        'connection_timeout' => 3,
-        'read_write_timeout' => 130,
-        'liveness_dir' => env('EVENTBUS_LIVENESS_DIR'), // null => storage/framework/eventbus
+        'prefetch_count' => (int) env('EVENTBUS_PREFETCH_COUNT', 1),
+        'heartbeat' => (int) env('EVENTBUS_HEARTBEAT', 60),
+        'connection_timeout' => (float) env('EVENTBUS_CONNECTION_TIMEOUT', 3),
+        'read_write_timeout' => (float) env('EVENTBUS_READ_WRITE_TIMEOUT', 130),
+        'liveness_dir' => env('EVENTBUS_LIVENESS_DIR'),
     ],
 
     /*
@@ -81,11 +82,9 @@ return [
     | Bounds every publish so a stalled broker can never block a worker forever.
     */
     'publisher' => [
-        'confirm_delivery' => true,
-        'persistent_messages' => true,
-        'connection_timeout' => 3,   // seconds to open the socket
-        'read_write_timeout' => 15,  // seconds a single read/write may block
-        'confirm_timeout' => 10,  // seconds to wait for the broker confirm
+        'connection_timeout' => (float) env('EVENTBUS_PUBLISHER_CONNECTION_TIMEOUT', 3),  // seconds to open the socket
+        'read_write_timeout' => (float) env('EVENTBUS_PUBLISHER_READ_WRITE_TIMEOUT', 15), // seconds a single read/write may block
+        'confirm_timeout' => (float) env('EVENTBUS_PUBLISHER_CONFIRM_TIMEOUT', 10),    // seconds to wait for the broker confirm
     ],
 
     /*
@@ -94,9 +93,8 @@ return [
     |--------------------------------------------------------------------------
     */
     'monitoring' => [
-        'enabled' => true,
-        'slow_event_threshold' => 5000, // ms
-        'log_payload' => false,
+        'enabled' => env('EVENTBUS_MONITORING_ENABLED', true),
+        'slow_event_threshold' => (int) env('EVENTBUS_SLOW_EVENT_THRESHOLD', 5000), // ms
     ],
 
     /*

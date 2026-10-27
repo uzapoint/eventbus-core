@@ -61,6 +61,18 @@ return [
 
 To see every available option: `php artisan vendor:publish --tag=eventbus-config`.
 
+Every default can also be set per environment with an `EVENTBUS_*` variable:
+
+| Variable                                                                             | Default                                      |
+| ------------------------------------------------------------------------------------ | -------------------------------------------- |
+| `EVENTBUS_DLX_ENABLED` / `EVENTBUS_DLX_TTL` / `EVENTBUS_MAX_RETRIES`                 | `true` / `86400000` / `3`                    |
+| `EVENTBUS_IDEMPOTENCY_ENABLED` / `_TTL` / `_LOCK_TTL` / `_PREFIX`                    | `true` / `3600` / `120` / `event:processed:` |
+| `EVENTBUS_PREFETCH_COUNT` / `EVENTBUS_HEARTBEAT`                                     | `1` / `60`                                   |
+| `EVENTBUS_CONNECTION_TIMEOUT` / `EVENTBUS_READ_WRITE_TIMEOUT`                        | `3` / `130`                                  |
+| `EVENTBUS_LIVENESS_DIR`                                                              | `storage/framework/eventbus`                 |
+| `EVENTBUS_PUBLISHER_CONNECTION_TIMEOUT` / `_READ_WRITE_TIMEOUT` / `_CONFIRM_TIMEOUT` | `3` / `15` / `10`                            |
+| `EVENTBUS_MONITORING_ENABLED` / `EVENTBUS_SLOW_EVENT_THRESHOLD`                      | `true` / `5000`                              |
+
 Do not bind your own `EventProcessor`; retries and idempotency are handled by the package.
 
 ---
