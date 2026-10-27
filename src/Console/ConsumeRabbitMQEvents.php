@@ -64,8 +64,21 @@ class ConsumeRabbitMQEvents extends Command
             return self::SUCCESS;
         }
 
-        $this->livenessFile = rtrim((string) config('eventbus.consumer.liveness_dir', sys_get_temp_dir()), '/')
-            . '/eventbus-' . getmypid() . '.alive';
+        // Must match the watchdog's EVENTBUS_LIVENESS_DIR. The env var wins, then the config key
+        // (an app's own config/eventbus.php may not define it), then the app's storage folder.
+        $livenessDir = rtrim((string) (
+            env('EVENTBUS_LIVENESS_DIR')
+            ?: config('eventbus.consumer.liveness_dir')
+            ?: storage_path('framework/eventbus')
+        ), '/');
+
+        if (!is_dir($livenessDir) && !@mkdir($livenessDir, 0775, true) && !is_dir($livenessDir)) {
+            Log::critical('[EventBus] Cannot create liveness directory, the watchdog would be blind', [
+                'dir' => $livenessDir,
+            ]);
+        }
+
+        $this->livenessFile = $livenessDir . '/eventbus-' . getmypid() . '.alive';
 
         try {
             $this->connect();
