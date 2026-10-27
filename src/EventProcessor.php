@@ -4,7 +4,9 @@ namespace Uzapoint\EventBus;
 
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
+use OutOfBoundsException;
 use PhpAmqpLib\Message\AMQPMessage;
+use PhpAmqpLib\Wire\AMQPTable;
 use Throwable;
 use ReflectionClass;
 use RuntimeException;
@@ -13,14 +15,15 @@ class EventProcessor
 {
     public function __construct(
         protected EventRegistry $registry
-    ) {}
+    ) {
+    }
 
     /**
      * Main entry point for processing events
      */
     public function process(AMQPMessage $message): void
     {
-        $routingKey = $message->getRoutingKey();
+        $routingKey = $this->originalRoutingKey($message);
         $payload = json_decode($message->getBody(), true);
 
         $trace = [
@@ -30,8 +33,8 @@ class EventProcessor
 
         if (!is_array($payload) || !isset($payload['data'])) {
             Log::error('[EventBus] Invalid event envelope', $trace + [
-                    'body' => $message->getBody(),
-                ]);
+                'body' => $message->getBody(),
+            ]);
             return;
         }
 
@@ -48,8 +51,8 @@ class EventProcessor
          */
         if ($this->isDuplicate($eventId)) {
             Log::warning('[EventBus] Duplicate event ignored', $trace + [
-                    'event_id' => $eventId,
-                ]);
+                'event_id' => $eventId,
+            ]);
             return;
         }
 
@@ -65,8 +68,8 @@ class EventProcessor
         }
 
         Log::info('[EventBus] Event received', $trace + [
-                'handler' => $handler,
-            ]);
+            'handler' => $handler,
+        ]);
 
         /**
          * 3. Execute handler safely
@@ -75,15 +78,57 @@ class EventProcessor
             $this->dispatch($handler, $data);
         } catch (Throwable $e) {
             Log::error('[EventBus] Handler execution failed', $trace + [
-                    'handler' => $handler,
-                    'error' => $e->getMessage(),
-                ]);
+                'handler' => $handler,
+                'error' => $e->getMessage(),
+            ]);
+
+            // The idempotency key was taken before the handler ran. Release it, otherwise the
+            // retry of this same event would be ignored as a duplicate and the event is lost.
+            $this->releaseIdempotencyKey($eventId);
 
             /**
              * IMPORTANT:
              * Let consumer decide retry strategy (ack/nack).
              */
             throw $e;
+        }
+    }
+
+    /**
+     * A retried message is republished onto its own queue through the default exchange, so its
+     * routing key becomes the queue name. The consumer keeps the real one in a header.
+     */
+    protected function originalRoutingKey(AMQPMessage $message): string
+    {
+        try {
+            $table = $message->get('application_headers');
+        } catch (OutOfBoundsException) {
+            return $message->getRoutingKey();
+        }
+
+        if ($table instanceof AMQPTable) {
+            $original = $table->getNativeData()['x-original-routing-key'] ?? null;
+            if (is_string($original) && $original !== '') {
+                return $original;
+            }
+        }
+
+        return $message->getRoutingKey();
+    }
+
+    protected function releaseIdempotencyKey(?string $id): void
+    {
+        if (!$id) {
+            return;
+        }
+
+        try {
+            Redis::del(config('eventbus.idempotency.redis_prefix') . $id);
+        } catch (Throwable $e) {
+            Log::error('[EventBus] Could not release idempotency key', [
+                'event_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 
@@ -159,8 +204,8 @@ class EventProcessor
 
                     return match ($name) {
                         'authUserId' => $data['auth_user_id'] ?? null,
-                        'payload'    => $data,
-                        default      => $data[$name] ?? null,
+                        'payload' => $data,
+                        default => $data[$name] ?? null,
                     };
                 })
                 ->values()

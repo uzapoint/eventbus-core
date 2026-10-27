@@ -6,29 +6,20 @@ return [
     |--------------------------------------------------------------------------
     | Exchanges
     |--------------------------------------------------------------------------
-    | Define topic exchanges this service interacts with.
-    | Leave empty and define inside microservice if needed.
+    | Topic exchanges this service interacts with. Define per microservice.
     */
     'exchanges' => [],
-
 
     /*
     |--------------------------------------------------------------------------
     | Queues
     |--------------------------------------------------------------------------
-    | Queue topology definition.
-    | Structure:
     | [
-    |   [
-    |       'name' => '',
-    |       'exchange' => '',
-    |       'routing_keys' => [],
-    |       'retry' => true,
-    |   ],
+    |   ['name' => '', 'exchange' => '', 'routing_keys' => [], 'retry' => true],
     | ]
+    | NOTE: changing x-* arguments of an existing queue causes PRECONDITION_FAILED.
     */
     'queues' => [],
-
 
     /*
     |--------------------------------------------------------------------------
@@ -38,56 +29,60 @@ return [
     */
     'handlers' => [],
 
-
     /*
     |--------------------------------------------------------------------------
     | Dead Letter Strategy
     |--------------------------------------------------------------------------
+    | After max_retries a message is parked in "<queue>.dlq" (never silently acked away).
     */
     'dead_letter' => [
-        'enabled'      => true,
-        'ttl'          => 86400000, // 24h in ms
-        'max_retries'  => 3,
+        'enabled' => true,
+        'ttl' => 86400000, // 24h in ms
+        'max_retries' => 3,
         'exchange_prefix' => 'dlx.',
     ],
-
 
     /*
     |--------------------------------------------------------------------------
     | Idempotency
     |--------------------------------------------------------------------------
+    | The key is released again when a handler fails, so retries are processed.
     */
     'idempotency' => [
-        'enabled'      => true,
-        'ttl'          => 3600,
+        'enabled' => true,
+        'ttl' => 3600,
         'redis_prefix' => 'event:processed:',
     ],
-
 
     /*
     |--------------------------------------------------------------------------
     | Consumer Configuration
     |--------------------------------------------------------------------------
+    | read_write_timeout must be > 2 x heartbeat.
+    | liveness_dir: each consumer touches eventbus-<pid>.alive every loop; the
+    | watchdog (ops/eventbus-watchdog.sh) kills consumers whose file goes stale.
     */
     'consumer' => [
         'prefetch_count' => 1,
-        'heartbeat'      => 60,
+        'heartbeat' => 60,
         'connection_timeout' => 3,
         'read_write_timeout' => 130,
-        'retry_on_failure' => false, // allow override
+        'liveness_dir' => env('EVENTBUS_LIVENESS_DIR', storage_path('framework/eventbus')),
     ],
-
 
     /*
     |--------------------------------------------------------------------------
     | Publishing Configuration
     |--------------------------------------------------------------------------
+    | Bounds every publish so a stalled broker can never block a worker forever.
     */
     'publisher' => [
         'confirm_delivery' => true,
         'persistent_messages' => true,
+        'connection_timeout' => 3,   // seconds to open the socket
+        'read_write_timeout' => 15,  // seconds a single read/write may block
+        'confirm_timeout' => 10,  // seconds to wait for the broker confirm
     ],
-
 
     /*
     |--------------------------------------------------------------------------
@@ -100,16 +95,14 @@ return [
         'log_payload' => false,
     ],
 
-
     /*
     |--------------------------------------------------------------------------
     | Tracing
     |--------------------------------------------------------------------------
-    | Correlation ID propagation support
     */
     'tracing' => [
         'enabled' => true,
-        'header'  => 'X-Correlation-ID',
+        'header' => 'X-Correlation-ID',
         'generate_if_missing' => true,
     ],
 
