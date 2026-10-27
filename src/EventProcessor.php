@@ -13,14 +13,16 @@ use RuntimeException;
 
 class EventProcessor
 {
+    protected const ACQUIRED = 'acquired';
+    protected const DONE = 'done';
+    protected const PROCESSING = 'processing';
+    protected const STATE_PROCESSING = 'processing';
+
     public function __construct(
         protected EventRegistry $registry
     ) {
     }
 
-    /**
-     * Main entry point for processing events
-     */
     public function process(AMQPMessage $message): void
     {
         $routingKey = $this->originalRoutingKey($message);
@@ -47,17 +49,7 @@ class EventProcessor
         $trace['correlation_id'] = $correlationId;
 
         /**
-         * 1. Idempotency guard (must be atomic)
-         */
-        if ($this->isDuplicate($eventId)) {
-            Log::warning('[EventBus] Duplicate event ignored', $trace + [
-                'event_id' => $eventId,
-            ]);
-            return;
-        }
-
-        /**
-         * 2. Resolve handler (registry first, fallback to config)
+         * 1. Resolve handler (registry first, fallback to config)
          */
         $handler = $this->registry->getHandler($routingKey)
             ?? config("eventbus.handlers.$routingKey");
@@ -67,13 +59,20 @@ class EventProcessor
             return;
         }
 
+        $state = $this->acquire($eventId);
+
+        if ($state !== self::ACQUIRED) {
+            Log::warning('[EventBus] Duplicate event ignored', $trace + [
+                'event_id' => $eventId,
+                'state' => $state,
+            ]);
+            return;
+        }
+
         Log::info('[EventBus] Event received', $trace + [
             'handler' => $handler,
         ]);
 
-        /**
-         * 3. Execute handler safely
-         */
         try {
             $this->dispatch($handler, $data);
         } catch (Throwable $e) {
@@ -82,22 +81,14 @@ class EventProcessor
                 'error' => $e->getMessage(),
             ]);
 
-            // The idempotency key was taken before the handler ran. Release it, otherwise the
-            // retry of this same event would be ignored as a duplicate and the event is lost.
-            $this->releaseIdempotencyKey($eventId);
+            $this->release($eventId);
 
-            /**
-             * IMPORTANT:
-             * Let consumer decide retry strategy (ack/nack).
-             */
             throw $e;
         }
+
+        $this->markProcessed($eventId);
     }
 
-    /**
-     * A retried message is republished onto its own queue through the default exchange, so its
-     * routing key becomes the queue name. The consumer keeps the real one in a header.
-     */
     protected function originalRoutingKey(AMQPMessage $message): string
     {
         try {
@@ -116,14 +107,61 @@ class EventProcessor
         return $message->getRoutingKey();
     }
 
-    protected function releaseIdempotencyKey(?string $id): void
+    protected function idempotencyKey(string $id): string
     {
-        if (!$id) {
+        return config('eventbus.idempotency.redis_prefix', 'event:processed:') . $id;
+    }
+
+    protected function acquire(?string $id): string
+    {
+        if (!$id || !config('eventbus.idempotency.enabled', true)) {
+            return self::ACQUIRED;
+        }
+
+        $key = $this->idempotencyKey($id);
+        $lockTtl = (int) config('eventbus.idempotency.lock_ttl', 120);
+
+        try {
+            if (Redis::set($key, self::STATE_PROCESSING, 'EX', $lockTtl, 'NX')) {
+                return self::ACQUIRED;
+            }
+
+            return (string) Redis::get($key) === self::STATE_PROCESSING ? self::PROCESSING : self::DONE;
+        } catch (Throwable $e) {
+            // Fail open: better to risk a duplicate than to lose an event.
+            Log::error('[EventBus] Redis idempotency check failed', [
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ]);
+
+            return self::ACQUIRED;
+        }
+    }
+
+    protected function markProcessed(?string $id): void
+    {
+        if (!$id || !config('eventbus.idempotency.enabled', true)) {
             return;
         }
 
         try {
-            Redis::del(config('eventbus.idempotency.redis_prefix') . $id);
+            Redis::setex($this->idempotencyKey($id), (int) config('eventbus.idempotency.ttl', 3600), '1');
+        } catch (Throwable $e) {
+            Log::error('[EventBus] Could not mark event as processed', [
+                'event_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    protected function release(?string $id): void
+    {
+        if (!$id || !config('eventbus.idempotency.enabled', true)) {
+            return;
+        }
+
+        try {
+            Redis::del($this->idempotencyKey($id));
         } catch (Throwable $e) {
             Log::error('[EventBus] Could not release idempotency key', [
                 'event_id' => $id,
@@ -132,50 +170,18 @@ class EventProcessor
         }
     }
 
-    /**
-     * Atomic idempotency check using SET NX EX
-     */
-    protected function isDuplicate(?string $id): bool
-    {
-        if (!$id) {
-            return false;
-        }
-
-        $key = config('eventbus.idempotency.redis_prefix') . $id;
-        $ttl = (int) config('eventbus.idempotency.ttl', 3600);
-
-        try {
-            $result = Redis::set($key, 1, 'EX', $ttl, 'NX');
-            return $result === null;
-        } catch (Throwable $e) {
-            // Fail-open OR fail-safe decision:
-            // we log but DO NOT block processing
-            Log::error('[EventBus] Redis idempotency check failed', [
-                'key' => $key,
-                'error' => $e->getMessage(),
-            ]);
-
-            return false;
-        }
-    }
-
-    /**
-     * Dispatch handler (supports Laravel jobs or service handlers)
-     */
     protected function dispatch(string $handler, array $data): void
     {
         if (!class_exists($handler)) {
             throw new RuntimeException("Handler not found: {$handler}");
         }
 
-        // Queueable job style
         if (method_exists($handler, 'dispatch')) {
             $params = $this->mapConstructor($handler, $data);
             $handler::dispatch(...$params);
             return;
         }
 
-        // Service-style handler
         $instance = app($handler);
 
         if (!method_exists($instance, 'handle')) {
@@ -185,9 +191,6 @@ class EventProcessor
         $instance->handle($data);
     }
 
-    /**
-     * Map constructor args dynamically
-     */
     protected function mapConstructor(string $class, array $data): array
     {
         try {

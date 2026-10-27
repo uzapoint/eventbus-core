@@ -46,11 +46,15 @@ return [
     |--------------------------------------------------------------------------
     | Idempotency
     |--------------------------------------------------------------------------
-    | The key is released again when a handler fails, so retries are processed.
+    | Two phases: a short "processing" lock (lock_ttl) is taken before the handler runs and is
+    | released if it fails; the event is marked done for the full ttl only AFTER it succeeded.
+    | lock_ttl must be longer than the slowest handler, and short enough that a replay after a
+    | crashed worker is not ignored for long.
     */
     'idempotency' => [
         'enabled' => true,
         'ttl' => 3600,
+        'lock_ttl' => 120,
         'redis_prefix' => 'event:processed:',
     ],
 
