@@ -71,7 +71,7 @@ return [
         'heartbeat' => 60,
         'connection_timeout' => 3,
         'read_write_timeout' => 130,
-        'liveness_dir' => env('EVENTBUS_LIVENESS_DIR', storage_path('framework/eventbus')),
+        'liveness_dir' => env('EVENTBUS_LIVENESS_DIR'), // null => storage/framework/eventbus
     ],
 
     /*

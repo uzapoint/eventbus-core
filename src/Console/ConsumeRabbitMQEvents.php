@@ -53,6 +53,17 @@ class ConsumeRabbitMQEvents extends Command
     }
 
     /**
+     * Where the liveness files live. Must match the watchdog's EVENTBUS_LIVENESS_DIR.
+     * Shared with eventbus:doctor so both always agree.
+     */
+    public static function livenessDir(): string
+    {
+        return rtrim((string) (
+            config('eventbus.consumer.liveness_dir') ?: storage_path('framework/eventbus')
+        ), '/');
+    }
+
+    /**
      * ENTRY POINT
      */
     public function handle(): int
@@ -64,13 +75,7 @@ class ConsumeRabbitMQEvents extends Command
             return self::SUCCESS;
         }
 
-        // Must match the watchdog's EVENTBUS_LIVENESS_DIR. The env var wins, then the config key
-        // (an app's own config/eventbus.php may not define it), then the app's storage folder.
-        $livenessDir = rtrim((string) (
-            env('EVENTBUS_LIVENESS_DIR')
-            ?: config('eventbus.consumer.liveness_dir')
-            ?: storage_path('framework/eventbus')
-        ), '/');
+        $livenessDir = self::livenessDir();
 
         if (!is_dir($livenessDir) && !@mkdir($livenessDir, 0775, true) && !is_dir($livenessDir)) {
             Log::critical('[EventBus] Cannot create liveness directory, the watchdog would be blind', [
@@ -225,10 +230,18 @@ class ConsumeRabbitMQEvents extends Command
 
             $start = microtime(true);
 
+            // A retried copy arrives through the default exchange, so its AMQP routing key is the
+            // queue name. Log the real event name (kept in a header) and the attempt number.
+            $headers = $this->headers($message);
+
             $trace = [
-                'routing_key' => $message->getRoutingKey(),
+                'routing_key' => $headers['x-original-routing-key'] ?? $message->getRoutingKey(),
                 'delivery_tag' => $message->getDeliveryTag(),
             ];
+
+            if (isset($headers['x-retry-count'])) {
+                $trace['retry'] = (int) $headers['x-retry-count'];
+            }
 
             try {
                 $this->processor->process($message);
